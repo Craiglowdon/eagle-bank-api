@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/Craiglowdon/eagle-bank-api/middleware"
 	"github.com/Craiglowdon/eagle-bank-api/models"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -116,6 +118,124 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 
 	_ = writeJSON(w, http.StatusCreated, user)
 
+}
+
+func (h *UserHandler) GetUser(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	authenticatedUserID, ok := middleware.AuthenticatedUserID(
+		r.Context(),
+	)
+	if !ok {
+		response := models.ErrorResponse{
+			Message: "access token is missing or invalid",
+		}
+
+		_ = writeJSON(w, http.StatusUnauthorized, response)
+		return
+	}
+
+	requestedUserID := r.PathValue("userId")
+
+	var user models.User
+	var addressLine2 sql.NullString
+	var addressLine3 sql.NullString
+	var createdTimestamp string
+	var updatedTimestamp string
+
+	err := h.db.QueryRowContext(
+		r.Context(),
+		`
+			SELECT
+				id,
+				name,
+				address_line1,
+				address_line2,
+				address_line3,
+				town,
+				county,
+				postcode,
+				phone_number,
+				email,
+				created_timestamp,
+				updated_timestamp
+			FROM users
+			WHERE id = ?
+		`,
+		requestedUserID,
+	).Scan(
+		&user.ID,
+		&user.Name,
+		&user.Address.Line1,
+		&addressLine2,
+		&addressLine3,
+		&user.Address.Town,
+		&user.Address.County,
+		&user.Address.Postcode,
+		&user.PhoneNumber,
+		&user.Email,
+		&createdTimestamp,
+		&updatedTimestamp,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		response := models.ErrorResponse{
+			Message: "user not found",
+		}
+
+		_ = writeJSON(w, http.StatusNotFound, response)
+		return
+	}
+
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to fetch user",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	if authenticatedUserID != requestedUserID {
+		response := models.ErrorResponse{
+			Message: "you are not allowed to access this user",
+		}
+
+		_ = writeJSON(w, http.StatusForbidden, response)
+		return
+	}
+
+	user.Address.Line2 = addressLine2.String
+	user.Address.Line3 = addressLine3.String
+
+	user.CreatedTimestamp, err = time.Parse(
+		time.RFC3339Nano,
+		createdTimestamp,
+	)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to fetch user",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	user.UpdatedTimestamp, err = time.Parse(
+		time.RFC3339Nano,
+		updatedTimestamp,
+	)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to fetch user",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	_ = writeJSON(w, http.StatusOK, user)
 }
 
 func generateUserID() string {

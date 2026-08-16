@@ -8,6 +8,7 @@ import (
 
 	"github.com/Craiglowdon/eagle-bank-api/database"
 	"github.com/Craiglowdon/eagle-bank-api/handlers"
+	"github.com/Craiglowdon/eagle-bank-api/middleware"
 )
 
 func routes(db *sql.DB, jwtSecret []byte) http.Handler {
@@ -15,6 +16,7 @@ func routes(db *sql.DB, jwtSecret []byte) http.Handler {
 
 	userHandler := handlers.NewUserHandler(db)
 	authHandler := handlers.NewAuthHandler(db, jwtSecret)
+	authenticate := middleware.Authenticate(jwtSecret)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -22,6 +24,11 @@ func routes(db *sql.DB, jwtSecret []byte) http.Handler {
 
 	mux.HandleFunc("POST /v1/users", userHandler.CreateUser)
 	mux.HandleFunc("POST /v1/auth/login", authHandler.Login)
+
+	mux.Handle(
+		"GET /v1/users/{userId}",
+		authenticate(http.HandlerFunc(userHandler.GetUser)),
+	)
 
 	return mux
 }

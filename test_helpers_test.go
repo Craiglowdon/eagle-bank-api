@@ -99,3 +99,54 @@ func createTestUser(
 
 	return createdUser, createUserRequest
 }
+
+func loginTestUser(
+	t *testing.T,
+	handler http.Handler,
+	email string,
+	password string,
+) string {
+	t.Helper()
+
+	loginRequest := models.LoginRequest{
+		Email:    email,
+		Password: password,
+	}
+
+	body, err := json.Marshal(loginRequest)
+	if err != nil {
+		t.Fatalf("failed to encode login request: %v", err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/auth/login",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"failed to log in test user: expected status %d, got %d; body: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var loginResponse models.LoginResponse
+
+	if err := json.NewDecoder(response.Body).Decode(&loginResponse); err != nil {
+		t.Fatalf("failed to decode login response: %v", err)
+	}
+
+	if loginResponse.Token == "" {
+		t.Fatal("expected login response to contain a token")
+	}
+
+	return loginResponse.Token
+}

@@ -254,3 +254,113 @@ func TestCreateUserRejectsMissingRequiredFields(t *testing.T) {
 		})
 	}
 }
+
+func TestGetUserRequiresAuthentication(t *testing.T) {
+	handler := testRoutes(t)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/users/usr-test",
+		nil,
+	)
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusUnauthorized,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	if response.Header().Get("Content-Type") != "application/json" {
+		t.Errorf(
+			"expected Content-Type application/json, got %q",
+			response.Header().Get("Content-Type"),
+		)
+	}
+
+	var errorResponse models.ErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(&errorResponse); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected an authentication error message")
+	}
+}
+
+func TestGetUser(t *testing.T) {
+	db := testDatabase(t)
+	handler := routes(db, []byte(testJWTSecret))
+
+	createdUser, createRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createRequest.Email,
+		createRequest.Password,
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/users/"+createdUser.ID,
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	if response.Header().Get("Content-Type") != "application/json" {
+		t.Errorf(
+			"expected Content-Type application/json, got %q",
+			response.Header().Get("Content-Type"),
+		)
+	}
+
+	var fetchedUser models.User
+
+	if err := json.NewDecoder(response.Body).Decode(&fetchedUser); err != nil {
+		t.Fatalf("failed to decode fetched user: %v", err)
+	}
+
+	if fetchedUser.ID != createdUser.ID {
+		t.Errorf(
+			"expected user ID %q, got %q",
+			createdUser.ID,
+			fetchedUser.ID,
+		)
+	}
+
+	if fetchedUser.Name != createRequest.Name {
+		t.Errorf(
+			"expected name %q, got %q",
+			createRequest.Name,
+			fetchedUser.Name,
+		)
+	}
+
+	if fetchedUser.Email != createRequest.Email {
+		t.Errorf(
+			"expected email %q, got %q",
+			createRequest.Email,
+			fetchedUser.Email,
+		)
+	}
+}
