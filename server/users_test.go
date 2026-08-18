@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -31,7 +31,7 @@ func TestCreateUser(t *testing.T) {
 	response := httptest.NewRecorder()
 	db := testDatabase(t)
 
-	routes(db, []byte(testJWTSecret)).ServeHTTP(response, request)
+	NewRouter(db, []byte(testJWTSecret)).ServeHTTP(response, request)
 
 	if response.Code != http.StatusCreated {
 		t.Fatalf(
@@ -296,7 +296,7 @@ func TestGetUserRequiresAuthentication(t *testing.T) {
 
 func TestGetUser(t *testing.T) {
 	db := testDatabase(t)
-	handler := routes(db, []byte(testJWTSecret))
+	handler := NewRouter(db, []byte(testJWTSecret))
 
 	createdUser, createRequest := createTestUser(t, handler)
 
@@ -367,7 +367,7 @@ func TestGetUser(t *testing.T) {
 
 func TestGetUserRejectsAnotherUser(t *testing.T) {
 	db := testDatabase(t)
-	handler := routes(db, []byte(testJWTSecret))
+	handler := NewRouter(db, []byte(testJWTSecret))
 
 	targetUser, _ := createTestUser(t, handler)
 
@@ -415,7 +415,7 @@ func TestGetUserRejectsAnotherUser(t *testing.T) {
 
 func TestGetUserReturnsNotFound(t *testing.T) {
 	db := testDatabase(t)
-	handler := routes(db, []byte(testJWTSecret))
+	handler := NewRouter(db, []byte(testJWTSecret))
 
 	_, createRequest := createTestUser(t, handler)
 

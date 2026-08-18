@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -13,7 +13,7 @@ import (
 
 func TestLogin(t *testing.T) {
 	db := testDatabase(t)
-	handler := routes(db, []byte(testJWTSecret))
+	handler := NewRouter(db, []byte(testJWTSecret))
 
 	createdUser, createUserRequest := createTestUser(t, handler)
 
@@ -106,7 +106,7 @@ func TestLogin(t *testing.T) {
 
 func TestLoginRejectsInvalidCredentials(t *testing.T) {
 	db := testDatabase(t)
-	handler := routes(db, []byte(testJWTSecret))
+	handler := NewRouter(db, []byte(testJWTSecret))
 
 	_, createdUserRequest := createTestUser(t, handler)
 

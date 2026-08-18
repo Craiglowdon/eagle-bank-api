@@ -1,37 +1,13 @@
 package main
 
 import (
-	"database/sql"
 	"log"
 	"net/http"
 	"os"
 
 	"github.com/Craiglowdon/eagle-bank-api/database"
-	"github.com/Craiglowdon/eagle-bank-api/handlers"
-	"github.com/Craiglowdon/eagle-bank-api/middleware"
+	"github.com/Craiglowdon/eagle-bank-api/server"
 )
-
-func routes(db *sql.DB, jwtSecret []byte) http.Handler {
-	mux := http.NewServeMux()
-
-	userHandler := handlers.NewUserHandler(db)
-	authHandler := handlers.NewAuthHandler(db, jwtSecret)
-	authenticate := middleware.Authenticate(jwtSecret)
-
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
-	mux.HandleFunc("POST /v1/users", userHandler.CreateUser)
-	mux.HandleFunc("POST /v1/auth/login", authHandler.Login)
-
-	mux.Handle(
-		"GET /v1/users/{userId}",
-		authenticate(http.HandlerFunc(userHandler.GetUser)),
-	)
-
-	return mux
-}
 
 func main() {
 
@@ -47,7 +23,7 @@ func main() {
 	defer db.Close()
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: routes(db, []byte(jwtSecret)),
+		Handler: server.NewRouter(db, []byte(jwtSecret)),
 	}
 
 	log.Println("Eagle Bank API listening on :8080")

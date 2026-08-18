@@ -1,0 +1,40 @@
+package server
+
+import (
+	"database/sql"
+	"net/http"
+
+	"github.com/Craiglowdon/eagle-bank-api/handlers"
+	"github.com/Craiglowdon/eagle-bank-api/middleware"
+)
+
+func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
+	mux := http.NewServeMux()
+
+	userHandler := handlers.NewUserHandler(db)
+	authHandler := handlers.NewAuthHandler(db, jwtSecret)
+	authenticate := middleware.Authenticate(jwtSecret)
+	accountHandler := handlers.NewAccountHandler(db)
+
+	mux.HandleFunc("GET /health", func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	mux.HandleFunc("POST /v1/users", userHandler.CreateUser)
+	mux.HandleFunc("POST /v1/auth/login", authHandler.Login)
+
+	mux.Handle(
+		"GET /v1/users/{userId}",
+		authenticate(http.HandlerFunc(userHandler.GetUser)),
+	)
+
+	mux.Handle(
+		"POST /v1/accounts",
+		authenticate(http.HandlerFunc(accountHandler.CreateAccount)),
+	)
+
+	return mux
+}

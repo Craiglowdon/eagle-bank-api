@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"bytes"
@@ -52,7 +52,7 @@ func testDatabase(t *testing.T) *sql.DB {
 func testRoutes(t *testing.T) http.Handler {
 	t.Helper()
 
-	return routes(
+	return NewRouter(
 		testDatabase(t),
 		[]byte(testJWTSecret),
 	)
