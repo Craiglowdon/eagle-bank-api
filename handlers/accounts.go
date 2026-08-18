@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -161,4 +162,214 @@ func generateAccountNumber() (string, error) {
 	}
 
 	return fmt.Sprintf("01%06d", number.Int64()), nil
+}
+
+func (h *AccountHandler) ListAccounts(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	userID, ok := middleware.AuthenticatedUserID(r.Context())
+	if !ok {
+		response := models.ErrorResponse{
+			Message: "access token is missing or invalid",
+		}
+
+		_ = writeJSON(w, http.StatusUnauthorized, response)
+		return
+	}
+
+	rows, err := h.db.QueryContext(
+		r.Context(),
+		`
+			SELECT
+				account_number,
+				user_id,
+				sort_code,
+				name,
+				account_type,
+				balance_pence,
+				currency,
+				created_timestamp,
+				updated_timestamp
+			FROM accounts
+			WHERE user_id = ?
+			ORDER BY created_timestamp, account_number
+		`,
+		userID,
+	)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to list accounts",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+	defer rows.Close()
+
+	accounts := make([]models.BankAccount, 0)
+
+	for rows.Next() {
+		storedAccount, err := scanBankAccount(rows)
+		if err != nil {
+			response := models.ErrorResponse{
+				Message: "failed to list accounts",
+			}
+
+			_ = writeJSON(
+				w,
+				http.StatusInternalServerError,
+				response,
+			)
+			return
+		}
+
+		accounts = append(accounts, storedAccount.account)
+	}
+
+	if err := rows.Err(); err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to list accounts",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	response := models.ListBankAccountsResponse{
+		Accounts: accounts,
+	}
+
+	_ = writeJSON(w, http.StatusOK, response)
+}
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+type storedBankAccount struct {
+	account models.BankAccount
+	userID  string
+}
+
+func scanBankAccount(
+	row rowScanner,
+) (storedBankAccount, error) {
+	var storedAccount storedBankAccount
+	var accountType string
+	var balancePence int64
+	var currency string
+	var createdTimestamp string
+	var updatedTimestamp string
+
+	err := row.Scan(
+		&storedAccount.account.AccountNumber,
+		&storedAccount.userID,
+		&storedAccount.account.SortCode,
+		&storedAccount.account.Name,
+		&accountType,
+		&balancePence,
+		&currency,
+		&createdTimestamp,
+		&updatedTimestamp,
+	)
+	if err != nil {
+		return storedBankAccount{},
+			fmt.Errorf("scan account: %w", err)
+	}
+
+	storedAccount.account.AccountType = models.AccountType(
+		accountType,
+	)
+	storedAccount.account.Balance = float64(balancePence) / 100
+	storedAccount.account.Currency = models.Currency(currency)
+
+	storedAccount.account.CreatedTimestamp, err = time.Parse(
+		time.RFC3339Nano,
+		createdTimestamp,
+	)
+	if err != nil {
+		return storedBankAccount{},
+			fmt.Errorf("parse created timestamp: %w", err)
+	}
+
+	storedAccount.account.UpdatedTimestamp, err = time.Parse(
+		time.RFC3339Nano,
+		updatedTimestamp,
+	)
+	if err != nil {
+		return storedBankAccount{},
+			fmt.Errorf("parse updated timestamp: %w", err)
+	}
+
+	return storedAccount, nil
+}
+
+func (h *AccountHandler) GetAccount(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	authenticatedUserID, ok := middleware.AuthenticatedUserID(
+		r.Context(),
+	)
+	if !ok {
+		response := models.ErrorResponse{
+			Message: "access token is missing or invalid",
+		}
+
+		_ = writeJSON(w, http.StatusUnauthorized, response)
+		return
+	}
+
+	accountNumber := r.PathValue("accountNumber")
+
+	storedAccount, err := scanBankAccount(
+		h.db.QueryRowContext(
+			r.Context(),
+			`
+				SELECT
+					account_number,
+					user_id,
+					sort_code,
+					name,
+					account_type,
+					balance_pence,
+					currency,
+					created_timestamp,
+					updated_timestamp
+				FROM accounts
+				WHERE account_number = ?
+			`,
+			accountNumber,
+		),
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		response := models.ErrorResponse{
+			Message: "account not found",
+		}
+
+		_ = writeJSON(w, http.StatusNotFound, response)
+		return
+	}
+
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to fetch account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	if storedAccount.userID != authenticatedUserID {
+		response := models.ErrorResponse{
+			Message: "you are not allowed to access this account",
+		}
+
+		_ = writeJSON(w, http.StatusForbidden, response)
+		return
+	}
+
+	_ = writeJSON(w, http.StatusOK, storedAccount.account)
 }

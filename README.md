@@ -13,17 +13,19 @@ Implemented:
 * Email/password login
 * JWT creation and validation
 * Fetch authenticated user details
-* Account creation
+* User ownership and not-found handling
+* Create bank accounts
 * List accounts belonging to the authenticated user
-* SQLite persistence
+* Fetch an individual owned account
+* Account ownership and not-found handling
+* SQLite persistence and database constraints
 * Request validation and structured error responses
-* Ownership checks
-* Automated HTTP, database and middleware tests
+* Automated HTTP, database and authentication middleware tests
 
 In progress:
 
-* Fetch, update and delete bank accounts
 * Update and delete users
+* Update and delete bank accounts
 * Deposit and withdrawal transactions
 * List and fetch transactions
 * Final OpenAPI updates and contract verification

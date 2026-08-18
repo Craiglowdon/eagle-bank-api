@@ -161,3 +161,46 @@ func loginTestUser(
 
 	return loginResponse.Token
 }
+
+func createAccount(
+	t *testing.T,
+	handler http.Handler,
+	token string,
+	createRequest models.CreateBankAccountRequest,
+) models.BankAccount {
+	t.Helper()
+
+	body, err := json.Marshal(createRequest)
+	if err != nil {
+		t.Fatalf("failed to encode create-account request: %v", err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/accounts",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusCreated {
+		t.Fatalf(
+			"failed to create account: expected status %d, got %d; body: %s",
+			http.StatusCreated,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var account models.BankAccount
+
+	if err := json.NewDecoder(response.Body).Decode(&account); err != nil {
+		t.Fatalf("failed to decode account response: %v", err)
+	}
+
+	return account
+}

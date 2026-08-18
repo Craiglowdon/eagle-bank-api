@@ -291,3 +291,309 @@ func TestCreateAccountRejectsInvalidRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestListAccounts(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, firstUserRequest := createTestUser(t, handler)
+
+	firstUserToken := loginTestUser(
+		t,
+		handler,
+		firstUserRequest.Email,
+		firstUserRequest.Password,
+	)
+
+	firstAccountRequest := validCreateAccountRequest()
+	firstAccountRequest.Name = "Current Account"
+
+	firstAccount := createAccount(
+		t,
+		handler,
+		firstUserToken,
+		firstAccountRequest,
+	)
+
+	secondAccountRequest := validCreateAccountRequest()
+	secondAccountRequest.Name = "Savings Account"
+
+	secondAccount := createAccount(
+		t,
+		handler,
+		firstUserToken,
+		secondAccountRequest,
+	)
+
+	secondUserRequest := validCreateUserRequest()
+	secondUserRequest.Name = "Another User"
+	secondUserRequest.Email = "another@example.com"
+
+	createUser(t, handler, secondUserRequest)
+
+	secondUserToken := loginTestUser(
+		t,
+		handler,
+		secondUserRequest.Email,
+		secondUserRequest.Password,
+	)
+
+	createAccount(
+		t,
+		handler,
+		secondUserToken,
+		validCreateAccountRequest(),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/accounts",
+		nil,
+	)
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+firstUserToken,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var listResponse models.ListBankAccountsResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&listResponse,
+	); err != nil {
+		t.Fatalf("failed to decode account list: %v", err)
+	}
+
+	if len(listResponse.Accounts) != 2 {
+		t.Fatalf(
+			"expected two accounts, got %d",
+			len(listResponse.Accounts),
+		)
+	}
+
+	accountNumbers := map[string]bool{
+		firstAccount.AccountNumber:  false,
+		secondAccount.AccountNumber: false,
+	}
+
+	for _, account := range listResponse.Accounts {
+		if _, expected := accountNumbers[account.AccountNumber]; !expected {
+			t.Errorf(
+				"received unexpected account %q",
+				account.AccountNumber,
+			)
+			continue
+		}
+
+		accountNumbers[account.AccountNumber] = true
+	}
+
+	for accountNumber, found := range accountNumbers {
+		if !found {
+			t.Errorf(
+				"expected account %q in response",
+				accountNumber,
+			)
+		}
+	}
+}
+
+func TestGetAccount(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	createdAccount := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/accounts/"+createdAccount.AccountNumber,
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var fetchedAccount models.BankAccount
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&fetchedAccount,
+	); err != nil {
+		t.Fatalf("failed to decode account response: %v", err)
+	}
+
+	if fetchedAccount.AccountNumber != createdAccount.AccountNumber {
+		t.Errorf(
+			"expected account number %q, got %q",
+			createdAccount.AccountNumber,
+			fetchedAccount.AccountNumber,
+		)
+	}
+
+	if fetchedAccount.Name != createdAccount.Name {
+		t.Errorf(
+			"expected name %q, got %q",
+			createdAccount.Name,
+			fetchedAccount.Name,
+		)
+	}
+
+	if fetchedAccount.Balance != createdAccount.Balance {
+		t.Errorf(
+			"expected balance %v, got %v",
+			createdAccount.Balance,
+			fetchedAccount.Balance,
+		)
+	}
+}
+
+func TestGetAccountRejectsAnotherUsersAccount(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, ownerRequest := createTestUser(t, handler)
+
+	ownerToken := loginTestUser(
+		t,
+		handler,
+		ownerRequest.Email,
+		ownerRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		ownerToken,
+		validCreateAccountRequest(),
+	)
+
+	requestingUserRequest := validCreateUserRequest()
+	requestingUserRequest.Name = "Another User"
+	requestingUserRequest.Email = "another@example.com"
+
+	createUser(t, handler, requestingUserRequest)
+
+	requestingUserToken := loginTestUser(
+		t,
+		handler,
+		requestingUserRequest.Email,
+		requestingUserRequest.Password,
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/accounts/"+account.AccountNumber,
+		nil,
+	)
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+requestingUserToken,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusForbidden,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var errorResponse models.ErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&errorResponse,
+	); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected a forbidden error message")
+	}
+}
+
+func TestGetAccountReturnsNotFound(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/accounts/01999999",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusNotFound,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var errorResponse models.ErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&errorResponse,
+	); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected a not-found error message")
+	}
+}

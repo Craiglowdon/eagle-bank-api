@@ -36,5 +36,15 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 		authenticate(http.HandlerFunc(accountHandler.CreateAccount)),
 	)
 
+	mux.Handle(
+		"GET /v1/accounts",
+		authenticate(http.HandlerFunc(accountHandler.ListAccounts)),
+	)
+
+	mux.Handle(
+		"GET /v1/accounts/{accountNumber}",
+		authenticate(http.HandlerFunc(accountHandler.GetAccount)),
+	)
+
 	return mux
 }
