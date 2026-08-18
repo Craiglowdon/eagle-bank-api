@@ -64,9 +64,20 @@ func createTestUser(
 ) (models.User, models.CreateUserRequest) {
 	t.Helper()
 
-	createUserRequest := validCreateUserRequest()
+	request := validCreateUserRequest()
+	user := createUser(t, handler, request)
 
-	body, err := json.Marshal(createUserRequest)
+	return user, request
+}
+
+func createUser(
+	t *testing.T,
+	handler http.Handler,
+	createRequest models.CreateUserRequest,
+) models.User {
+	t.Helper()
+
+	body, err := json.Marshal(createRequest)
 	if err != nil {
 		t.Fatalf("failed to encode create-user request: %v", err)
 	}
@@ -97,7 +108,7 @@ func createTestUser(
 		t.Fatalf("failed to decode created user: %v", err)
 	}
 
-	return createdUser, createUserRequest
+	return createdUser
 }
 
 func loginTestUser(

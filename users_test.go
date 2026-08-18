@@ -364,3 +364,85 @@ func TestGetUser(t *testing.T) {
 		)
 	}
 }
+
+func TestGetUserRejectsAnotherUser(t *testing.T) {
+	db := testDatabase(t)
+	handler := routes(db, []byte(testJWTSecret))
+
+	targetUser, _ := createTestUser(t, handler)
+
+	requestingUserDetails := validCreateUserRequest()
+	requestingUserDetails.Name = "Another User"
+	requestingUserDetails.Email = "another@example.com"
+
+	requestingUser := createUser(
+		t,
+		handler,
+		requestingUserDetails,
+	)
+
+	token := loginTestUser(
+		t,
+		handler,
+		requestingUserDetails.Email,
+		requestingUserDetails.Password,
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/users/"+targetUser.ID,
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusForbidden {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusForbidden,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	if requestingUser.ID == targetUser.ID {
+		t.Fatal("test setup created the same user ID twice")
+	}
+}
+
+func TestGetUserReturnsNotFound(t *testing.T) {
+	db := testDatabase(t)
+	handler := routes(db, []byte(testJWTSecret))
+
+	_, createRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createRequest.Email,
+		createRequest.Password,
+	)
+
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"/v1/users/usr-doesnotexist",
+		nil,
+	)
+	request.Header.Set("Authorization", "Bearer "+token)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusNotFound,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+}
