@@ -15,6 +15,7 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 	authHandler := handlers.NewAuthHandler(db, jwtSecret)
 	authenticate := middleware.Authenticate(jwtSecret)
 	accountHandler := handlers.NewAccountHandler(db)
+	transactionHandler := handlers.NewTransactionHandler(db)
 
 	mux.HandleFunc("GET /health", func(
 		w http.ResponseWriter,
@@ -44,6 +45,25 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 	mux.Handle(
 		"GET /v1/accounts/{accountNumber}",
 		authenticate(http.HandlerFunc(accountHandler.GetAccount)),
+	)
+
+	mux.Handle(
+		"POST /v1/accounts/{accountNumber}/transactions",
+		authenticate(http.HandlerFunc(transactionHandler.CreateTransaction)),
+	)
+
+	mux.Handle(
+		"GET /v1/accounts/{accountNumber}/transactions",
+		authenticate(http.HandlerFunc(transactionHandler.ListTransactions)),
+	)
+
+	mux.Handle(
+		"GET /v1/accounts/{accountNumber}/transactions/{transactionId}",
+		authenticate(
+			http.HandlerFunc(
+				transactionHandler.GetTransaction,
+			),
+		),
 	)
 
 	return mux

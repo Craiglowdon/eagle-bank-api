@@ -18,17 +18,39 @@ Implemented:
 * List accounts belonging to the authenticated user
 * Fetch an individual owned account
 * Account ownership and not-found handling
+* Create deposit and withdrawal transactions
+* Atomic account balance and transaction updates
+* Insufficient-funds handling
+* List transactions belonging to an account
+* Fetch an individual transaction
+* Transaction-to-account validation
+* Transaction ownership and not-found handling
 * SQLite persistence and database constraints
 * Request validation and structured error responses
 * Automated HTTP, database and authentication middleware tests
 
 In progress:
 
+* Remaining transaction creation and listing validation scenarios
 * Update and delete users
 * Update and delete bank accounts
-* Deposit and withdrawal transactions
-* List and fetch transactions
 * Final OpenAPI updates and contract verification
+
+## Implemented endpoints
+
+| Method | Path                                                        | Authentication |
+| ------ | ----------------------------------------------------------- | -------------- |
+| `GET`  | `/health`                                                   | No             |
+| `POST` | `/v1/users`                                                 | No             |
+| `POST` | `/v1/auth/login`                                            | No             |
+| `GET`  | `/v1/users/{userId}`                                        | Bearer JWT     |
+| `POST` | `/v1/accounts`                                              | Bearer JWT     |
+| `GET`  | `/v1/accounts`                                              | Bearer JWT     |
+| `GET`  | `/v1/accounts/{accountNumber}`                              | Bearer JWT     |
+| `POST` | `/v1/accounts/{accountNumber}/transactions`                 | Bearer JWT     |
+| `GET`  | `/v1/accounts/{accountNumber}/transactions`                 | Bearer JWT     |
+| `GET`  | `/v1/accounts/{accountNumber}/transactions/{transactionId}` | Bearer JWT     |
+
 
 ## Requirements
 
@@ -154,6 +176,18 @@ Monetary balances are stored as integer pennies:
 This avoids using binary floating-point values for persisted financial calculations.
 
 Values are converted to the numeric representation required by the OpenAPI contract only at the API boundary.
+
+### Transaction consistency
+
+Creating a transaction updates two pieces of persisted state:
+
+* The immutable transaction record
+* The account balance
+
+Both operations run inside one SQL transaction. The transaction is committed only after both operations succeed; otherwise, all changes are rolled back.
+
+Withdrawals with insufficient funds return `422 Unprocessable Entity` without creating a transaction or changing the account balance. Deposits that would exceed the contract’s maximum account balance are rejected in the same way.
+
 
 ### Ownership and authorisation
 

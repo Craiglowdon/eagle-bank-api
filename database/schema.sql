@@ -43,3 +43,34 @@ CREATE TABLE IF NOT EXISTS accounts (
 
 CREATE INDEX IF NOT EXISTS idx_accounts_user_id
     ON accounts(user_id);
+
+CREATE TABLE IF NOT EXISTS transactions (
+    id TEXT PRIMARY KEY,
+    account_number TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    amount_pence INTEGER NOT NULL
+        CHECK (
+            amount_pence >= 0
+            AND amount_pence <= 1000000
+        ),
+    currency TEXT NOT NULL
+        CHECK (currency = 'GBP'),
+    transaction_type TEXT NOT NULL
+        CHECK (
+            transaction_type = 'deposit'
+            OR transaction_type = 'withdrawal'
+        ),
+    reference TEXT,
+    created_timestamp TEXT NOT NULL,
+
+    FOREIGN KEY (account_number)
+        REFERENCES accounts(account_number)
+        ON DELETE RESTRICT,
+
+    FOREIGN KEY (user_id)
+        REFERENCES users(id)
+        ON DELETE RESTRICT
+);
+
+CREATE INDEX IF NOT EXISTS idx_transactions_account_created
+    ON transactions(account_number, created_timestamp);

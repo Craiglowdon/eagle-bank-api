@@ -17,6 +17,7 @@ func TestOpenCreatesTables(t *testing.T) {
 	expectedTables := []string{
 		"users",
 		"accounts",
+		"transactions",
 	}
 
 	for _, expectedTable := range expectedTables {
