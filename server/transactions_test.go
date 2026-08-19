@@ -771,3 +771,827 @@ func TestGetTransactionRejectsInvalidAccess(t *testing.T) {
 		})
 	}
 }
+
+func TestCreateTransactionRejectsInvalidAccess(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, ownerRequest := createTestUser(t, handler)
+
+	ownerToken := loginTestUser(
+		t,
+		handler,
+		ownerRequest.Email,
+		ownerRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		ownerToken,
+		validCreateAccountRequest(),
+	)
+
+	otherUserRequest := validCreateUserRequest()
+	otherUserRequest.Name = "Another User"
+	otherUserRequest.Email = "another@example.com"
+
+	createUser(t, handler, otherUserRequest)
+
+	otherUserToken := loginTestUser(
+		t,
+		handler,
+		otherUserRequest.Email,
+		otherUserRequest.Password,
+	)
+
+	requestBody := transactionRequest(
+		10,
+		models.TransactionTypeDeposit,
+	)
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		t.Fatalf("failed to encode transaction request: %v", err)
+	}
+
+	nonexistentAccountNumber := "01999999"
+	if account.AccountNumber == nonexistentAccountNumber {
+		nonexistentAccountNumber = "01888888"
+	}
+
+	tests := []struct {
+		name               string
+		token              string
+		accountNumber      string
+		expectedStatusCode int
+	}{
+		{
+			name:               "another user's account",
+			token:              otherUserToken,
+			accountNumber:      account.AccountNumber,
+			expectedStatusCode: http.StatusForbidden,
+		},
+		{
+			name:               "nonexistent account",
+			token:              ownerToken,
+			accountNumber:      nonexistentAccountNumber,
+			expectedStatusCode: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := fmt.Sprintf(
+				"/v1/accounts/%s/transactions",
+				test.accountNumber,
+			)
+
+			request := httptest.NewRequest(
+				http.MethodPost,
+				path,
+				bytes.NewReader(body),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set(
+				"Authorization",
+				"Bearer "+test.token,
+			)
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.expectedStatusCode {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					test.expectedStatusCode,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.ErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf("failed to decode error response: %v", err)
+			}
+
+			if errorResponse.Message == "" {
+				t.Error("expected an error message")
+			}
+		})
+	}
+
+	var balancePence int64
+
+	if err := db.QueryRow(
+		`
+			SELECT balance_pence
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&balancePence); err != nil {
+		t.Fatalf("failed to fetch account balance: %v", err)
+	}
+
+	if balancePence != 0 {
+		t.Errorf(
+			"expected balance to remain 0 pence, got %d",
+			balancePence,
+		)
+	}
+
+	var transactionCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM transactions
+		`,
+	).Scan(&transactionCount); err != nil {
+		t.Fatalf("failed to count transactions: %v", err)
+	}
+
+	if transactionCount != 0 {
+		t.Errorf(
+			"expected no transactions, got %d",
+			transactionCount,
+		)
+	}
+}
+
+func TestListTransactionsRejectsInvalidAccess(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, ownerRequest := createTestUser(t, handler)
+
+	ownerToken := loginTestUser(
+		t,
+		handler,
+		ownerRequest.Email,
+		ownerRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		ownerToken,
+		validCreateAccountRequest(),
+	)
+
+	createTransaction(
+		t,
+		handler,
+		ownerToken,
+		account.AccountNumber,
+		transactionRequest(
+			25,
+			models.TransactionTypeDeposit,
+		),
+	)
+
+	otherUserRequest := validCreateUserRequest()
+	otherUserRequest.Name = "Another User"
+	otherUserRequest.Email = "another@example.com"
+
+	createUser(t, handler, otherUserRequest)
+
+	otherUserToken := loginTestUser(
+		t,
+		handler,
+		otherUserRequest.Email,
+		otherUserRequest.Password,
+	)
+
+	nonexistentAccountNumber := "01999999"
+	if account.AccountNumber == nonexistentAccountNumber {
+		nonexistentAccountNumber = "01888888"
+	}
+
+	tests := []struct {
+		name               string
+		token              string
+		accountNumber      string
+		expectedStatusCode int
+	}{
+		{
+			name:               "another user's account",
+			token:              otherUserToken,
+			accountNumber:      account.AccountNumber,
+			expectedStatusCode: http.StatusForbidden,
+		},
+		{
+			name:               "nonexistent account",
+			token:              ownerToken,
+			accountNumber:      nonexistentAccountNumber,
+			expectedStatusCode: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := fmt.Sprintf(
+				"/v1/accounts/%s/transactions",
+				test.accountNumber,
+			)
+
+			request := httptest.NewRequest(
+				http.MethodGet,
+				path,
+				nil,
+			)
+			request.Header.Set(
+				"Authorization",
+				"Bearer "+test.token,
+			)
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.expectedStatusCode {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					test.expectedStatusCode,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.ErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf(
+					"failed to decode error response: %v",
+					err,
+				)
+			}
+
+			if errorResponse.Message == "" {
+				t.Error("expected an error message")
+			}
+		})
+	}
+}
+
+func TestCreateTransactionRejectsMissingRequiredFields(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	amount := 10.00
+
+	tests := []struct {
+		name          string
+		requestBody   models.CreateTransactionRequest
+		expectedField string
+	}{
+		{
+			name: "missing amount",
+			requestBody: models.CreateTransactionRequest{
+				Currency: models.CurrencyGBP,
+				Type:     models.TransactionTypeDeposit,
+			},
+			expectedField: "amount",
+		},
+		{
+			name: "missing currency",
+			requestBody: models.CreateTransactionRequest{
+				Amount: &amount,
+				Type:   models.TransactionTypeDeposit,
+			},
+			expectedField: "currency",
+		},
+		{
+			name: "missing type",
+			requestBody: models.CreateTransactionRequest{
+				Amount:   &amount,
+				Currency: models.CurrencyGBP,
+			},
+			expectedField: "type",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(test.requestBody)
+			if err != nil {
+				t.Fatalf(
+					"failed to encode transaction request: %v",
+					err,
+				)
+			}
+
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/accounts/"+
+					account.AccountNumber+
+					"/transactions",
+				bytes.NewReader(body),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set(
+				"Authorization",
+				"Bearer "+token,
+			)
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					http.StatusBadRequest,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.BadRequestErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf(
+					"failed to decode validation response: %v",
+					err,
+				)
+			}
+
+			foundExpectedError := false
+
+			for _, detail := range errorResponse.Details {
+				if detail.Field == test.expectedField &&
+					detail.Type == "required" {
+					foundExpectedError = true
+					break
+				}
+			}
+
+			if !foundExpectedError {
+				t.Errorf(
+					"expected required validation error for field %q, got %+v",
+					test.expectedField,
+					errorResponse.Details,
+				)
+			}
+		})
+	}
+
+	var transactionCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM transactions
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&transactionCount); err != nil {
+		t.Fatalf("failed to count transactions: %v", err)
+	}
+
+	if transactionCount != 0 {
+		t.Errorf(
+			"expected no transactions, got %d",
+			transactionCount,
+		)
+	}
+}
+
+func TestCreateTransactionRejectsInvalidValues(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	invalidCurrencyRequest := transactionRequest(
+		10,
+		models.TransactionTypeDeposit,
+	)
+	invalidCurrencyRequest.Currency = models.Currency("USD")
+
+	invalidTypeRequest := transactionRequest(
+		10,
+		models.TransactionType("transfer"),
+	)
+
+	tests := []struct {
+		name               string
+		requestBody        models.CreateTransactionRequest
+		expectedField      string
+		expectedDetailType string
+	}{
+		{
+			name: "negative amount",
+			requestBody: transactionRequest(
+				-0.01,
+				models.TransactionTypeDeposit,
+			),
+			expectedField:      "amount",
+			expectedDetailType: "invalid",
+		},
+		{
+			name: "amount exceeds maximum",
+			requestBody: transactionRequest(
+				10_000.01,
+				models.TransactionTypeDeposit,
+			),
+			expectedField:      "amount",
+			expectedDetailType: "invalid",
+		},
+		{
+			name: "amount has more than two decimal places",
+			requestBody: transactionRequest(
+				10.999,
+				models.TransactionTypeDeposit,
+			),
+			expectedField:      "amount",
+			expectedDetailType: "invalid",
+		},
+		{
+			name:               "unsupported currency",
+			requestBody:        invalidCurrencyRequest,
+			expectedField:      "currency",
+			expectedDetailType: "enum",
+		},
+		{
+			name:               "unsupported transaction type",
+			requestBody:        invalidTypeRequest,
+			expectedField:      "type",
+			expectedDetailType: "enum",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body, err := json.Marshal(test.requestBody)
+			if err != nil {
+				t.Fatalf(
+					"failed to encode transaction request: %v",
+					err,
+				)
+			}
+
+			request := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/accounts/"+
+					account.AccountNumber+
+					"/transactions",
+				bytes.NewReader(body),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set(
+				"Authorization",
+				"Bearer "+token,
+			)
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					http.StatusBadRequest,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.BadRequestErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf(
+					"failed to decode validation response: %v",
+					err,
+				)
+			}
+
+			foundExpectedError := false
+
+			for _, detail := range errorResponse.Details {
+				if detail.Field == test.expectedField &&
+					detail.Type == test.expectedDetailType {
+					foundExpectedError = true
+					break
+				}
+			}
+
+			if !foundExpectedError {
+				t.Errorf(
+					"expected %q validation error for field %q, got %+v",
+					test.expectedDetailType,
+					test.expectedField,
+					errorResponse.Details,
+				)
+			}
+		})
+	}
+
+	var balancePence int64
+	var transactionCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT balance_pence
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&balancePence); err != nil {
+		t.Fatalf("failed to fetch account balance: %v", err)
+	}
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM transactions
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&transactionCount); err != nil {
+		t.Fatalf("failed to count transactions: %v", err)
+	}
+
+	if balancePence != 0 {
+		t.Errorf(
+			"expected balance to remain 0 pence, got %d",
+			balancePence,
+		)
+	}
+
+	if transactionCount != 0 {
+		t.Errorf(
+			"expected no transactions, got %d",
+			transactionCount,
+		)
+	}
+}
+
+func TestCreateDepositRejectsMaximumBalanceExceeded(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	createTransaction(
+		t,
+		handler,
+		token,
+		account.AccountNumber,
+		transactionRequest(
+			10_000,
+			models.TransactionTypeDeposit,
+		),
+	)
+
+	requestBody := transactionRequest(
+		0.01,
+		models.TransactionTypeDeposit,
+	)
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		t.Fatalf("failed to encode deposit request: %v", err)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/accounts/"+
+			account.AccountNumber+
+			"/transactions",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusUnprocessableEntity,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var errorResponse models.ErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&errorResponse,
+	); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected an error message")
+	}
+
+	var balancePence int64
+
+	if err := db.QueryRow(
+		`
+			SELECT balance_pence
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&balancePence); err != nil {
+		t.Fatalf("failed to fetch account balance: %v", err)
+	}
+
+	if balancePence != 1_000_000 {
+		t.Errorf(
+			"expected balance to remain 1000000 pence, got %d",
+			balancePence,
+		)
+	}
+
+	var transactionCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM transactions
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&transactionCount); err != nil {
+		t.Fatalf("failed to count transactions: %v", err)
+	}
+
+	if transactionCount != 1 {
+		t.Errorf(
+			"expected only the original deposit, got %d transactions",
+			transactionCount,
+		)
+	}
+}
+
+func TestCreateTransactionRejectsMalformedJSON(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/accounts/"+
+			account.AccountNumber+
+			"/transactions",
+		strings.NewReader(`{"amount": 10,`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusBadRequest,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var errorResponse models.BadRequestErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&errorResponse,
+	); err != nil {
+		t.Fatalf(
+			"failed to decode error response: %v",
+			err,
+		)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected an error message")
+	}
+
+	if len(errorResponse.Details) != 0 {
+		t.Errorf(
+			"expected no field validation details, got %+v",
+			errorResponse.Details,
+		)
+	}
+
+	var balancePence int64
+	var transactionCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT balance_pence
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&balancePence); err != nil {
+		t.Fatalf("failed to fetch account balance: %v", err)
+	}
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM transactions
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&transactionCount); err != nil {
+		t.Fatalf("failed to count transactions: %v", err)
+	}
+
+	if balancePence != 0 {
+		t.Errorf(
+			"expected balance to remain 0 pence, got %d",
+			balancePence,
+		)
+	}
+
+	if transactionCount != 0 {
+		t.Errorf(
+			"expected no transactions, got %d",
+			transactionCount,
+		)
+	}
+}

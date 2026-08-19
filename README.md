@@ -20,21 +20,23 @@ Implemented:
 * Account ownership and not-found handling
 * Create deposit and withdrawal transactions
 * Atomic account balance and transaction updates
-* Insufficient-funds handling
+* Insufficient-funds protection
+* Maximum account-balance protection
+* Transaction request validation
 * List transactions belonging to an account
 * Fetch an individual transaction
 * Transaction-to-account validation
 * Transaction ownership and not-found handling
 * SQLite persistence and database constraints
-* Request validation and structured error responses
+* Structured error responses
 * Automated HTTP, database and authentication middleware tests
 
 In progress:
 
-* Remaining transaction creation and listing validation scenarios
 * Update and delete users
 * Update and delete bank accounts
 * Final OpenAPI updates and contract verification
+* Final code review and documentation polish
 
 ## Implemented endpoints
 
@@ -108,6 +110,20 @@ go test -v -count=1 ./...
 ```
 
 Tests use isolated temporary SQLite databases which are removed automatically after each test.
+
+API-level tests verify both HTTP responses and persisted database state.
+
+Transaction tests cover:
+
+* Deposits and withdrawals
+* Integer-penny persistence and balance calculations
+* Insufficient funds
+* Maximum account balance enforcement
+* Missing and invalid request fields
+* Malformed JSON
+* Account ownership and nonexistent accounts
+* Transaction-to-account scoping
+* Balance and transaction atomicity following rejected operations
 
 ## Authentication
 
@@ -240,7 +256,11 @@ The scenario document refers to account paths using `{accountId}`, while the sup
 /v1/accounts/{accountNumber}
 ```
 
-Other apparent schema inconsistencies will be documented and corrected in the submitted OpenAPI specification where necessary.
+The supplied transaction ID pattern allows exactly one alphanumeric character after the `tan-` prefix, despite providing an example such as `tan-123abc`. The implementation generates longer cryptographically random transaction IDs, and the submitted OpenAPI pattern will be corrected to accept them.
+
+Some identifier schemas use `format` for regular-expression constraints. These will use `pattern` in the submitted specification so OpenAPI validators interpret them correctly.
+
+The final OpenAPI specification will also document the added authentication flow and align its request and response schemas with the completed implementation.
 
 ## Project structure
 
