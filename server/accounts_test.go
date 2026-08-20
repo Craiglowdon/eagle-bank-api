@@ -1220,3 +1220,74 @@ func TestUpdateAccountWithEmptyPatchDoesNotModifyAccount(
 		)
 	}
 }
+
+func TestDeleteAccount(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/v1/accounts/"+account.AccountNumber,
+		nil,
+	)
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusNoContent,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	if response.Body.Len() != 0 {
+		t.Errorf(
+			"expected an empty response body, got %q",
+			response.Body.String(),
+		)
+	}
+
+	var accountCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&accountCount); err != nil {
+		t.Fatalf("failed to count stored accounts: %v", err)
+	}
+
+	if accountCount != 0 {
+		t.Errorf(
+			"expected account to be deleted, found %d matching accounts",
+			accountCount,
+		)
+	}
+}

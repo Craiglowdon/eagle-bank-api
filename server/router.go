@@ -53,6 +53,11 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 	)
 
 	mux.Handle(
+		"DELETE /v1/accounts/{accountNumber}",
+		authenticate(http.HandlerFunc(accountHandler.DeleteAccount)),
+	)
+
+	mux.Handle(
 		"POST /v1/accounts/{accountNumber}/transactions",
 		authenticate(http.HandlerFunc(transactionHandler.CreateTransaction)),
 	)

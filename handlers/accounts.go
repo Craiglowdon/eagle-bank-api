@@ -516,3 +516,80 @@ func (h *AccountHandler) UpdateAccount(
 
 	_ = writeJSON(w, http.StatusOK, updatedAccount)
 }
+
+func (h *AccountHandler) DeleteAccount(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	authenticatedUserID, ok := middleware.AuthenticatedUserID(
+		r.Context(),
+	)
+	if !ok {
+		response := models.ErrorResponse{
+			Message: "access token is missing or invalid",
+		}
+
+		_ = writeJSON(w, http.StatusUnauthorized, response)
+		return
+	}
+
+	accountNumber := r.PathValue("accountNumber")
+
+	var accountOwnerID string
+
+	err := h.db.QueryRowContext(
+		r.Context(),
+		`
+			SELECT user_id
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		accountNumber,
+	).Scan(&accountOwnerID)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		response := models.ErrorResponse{
+			Message: "account not found",
+		}
+
+		_ = writeJSON(w, http.StatusNotFound, response)
+		return
+	}
+
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to delete account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	if accountOwnerID != authenticatedUserID {
+		response := models.ErrorResponse{
+			Message: "you are not allowed to delete this account",
+		}
+
+		_ = writeJSON(w, http.StatusForbidden, response)
+		return
+	}
+
+	_, err = h.db.ExecContext(
+		r.Context(),
+		`
+			DELETE FROM accounts
+			WHERE account_number = ?
+		`,
+		accountNumber,
+	)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to delete account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
