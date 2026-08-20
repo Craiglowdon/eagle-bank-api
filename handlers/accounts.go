@@ -373,3 +373,146 @@ func (h *AccountHandler) GetAccount(
 
 	_ = writeJSON(w, http.StatusOK, storedAccount.account)
 }
+
+func (h *AccountHandler) UpdateAccount(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	authenticatedUserID, ok := middleware.AuthenticatedUserID(
+		r.Context(),
+	)
+	if !ok {
+		response := models.ErrorResponse{
+			Message: "access token is missing or invalid",
+		}
+
+		_ = writeJSON(w, http.StatusUnauthorized, response)
+		return
+	}
+
+	var request models.UpdateBankAccountRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		response := models.BadRequestErrorResponse{
+			Message: "invalid request body",
+			Details: []models.ValidationErrorDetail{},
+		}
+
+		_ = writeJSON(w, http.StatusBadRequest, response)
+		return
+	}
+
+	accountNumber := r.PathValue("accountNumber")
+
+	storedAccount, err := scanBankAccount(
+		h.db.QueryRowContext(
+			r.Context(),
+			`
+				SELECT
+					account_number,
+					user_id,
+					sort_code,
+					name,
+					account_type,
+					balance_pence,
+					currency,
+					created_timestamp,
+					updated_timestamp
+				FROM accounts
+				WHERE account_number = ?
+			`,
+			accountNumber,
+		),
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		response := models.ErrorResponse{
+			Message: "account not found",
+		}
+
+		_ = writeJSON(w, http.StatusNotFound, response)
+		return
+	}
+
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to update account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	if storedAccount.userID != authenticatedUserID {
+		response := models.ErrorResponse{
+			Message: "you are not allowed to update this account",
+		}
+
+		_ = writeJSON(w, http.StatusForbidden, response)
+		return
+	}
+
+	if request.Name == nil && request.AccountType == nil {
+		_ = writeJSON(
+			w,
+			http.StatusOK,
+			storedAccount.account,
+		)
+		return
+	}
+
+	updatedAccount := storedAccount.account
+
+	if request.Name != nil {
+		updatedAccount.Name = *request.Name
+	}
+
+	if request.AccountType != nil {
+		updatedAccount.AccountType = *request.AccountType
+	}
+
+	validationRequest := models.CreateBankAccountRequest{
+		Name:        updatedAccount.Name,
+		AccountType: updatedAccount.AccountType,
+	}
+
+	if details := validateCreateAccountRequest(
+		validationRequest,
+	); len(details) > 0 {
+		response := models.BadRequestErrorResponse{
+			Message: "invalid request",
+			Details: details,
+		}
+
+		_ = writeJSON(w, http.StatusBadRequest, response)
+		return
+	}
+
+	updatedAccount.UpdatedTimestamp = time.Now().UTC()
+
+	_, err = h.db.ExecContext(
+		r.Context(),
+		`
+			UPDATE accounts
+			SET
+				name = ?,
+				account_type = ?,
+				updated_timestamp = ?
+			WHERE account_number = ?
+		`,
+		updatedAccount.Name,
+		string(updatedAccount.AccountType),
+		updatedAccount.UpdatedTimestamp.Format(time.RFC3339Nano),
+		accountNumber,
+	)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to update account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	_ = writeJSON(w, http.StatusOK, updatedAccount)
+}

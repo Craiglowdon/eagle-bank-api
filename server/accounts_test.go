@@ -597,3 +597,626 @@ func TestGetAccountReturnsNotFound(t *testing.T) {
 		t.Error("expected a not-found error message")
 	}
 }
+
+func TestUpdateAccountName(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	createdAccount := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPatch,
+		"/v1/accounts/"+createdAccount.AccountNumber,
+		bytes.NewBufferString(`{"name":"Holiday Fund"}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var updatedAccount models.BankAccount
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&updatedAccount,
+	); err != nil {
+		t.Fatalf("failed to decode updated account: %v", err)
+	}
+
+	if updatedAccount.Name != "Holiday Fund" {
+		t.Errorf(
+			"expected name %q, got %q",
+			"Holiday Fund",
+			updatedAccount.Name,
+		)
+	}
+
+	if updatedAccount.AccountType != createdAccount.AccountType {
+		t.Errorf(
+			"expected account type to remain %q, got %q",
+			createdAccount.AccountType,
+			updatedAccount.AccountType,
+		)
+	}
+
+	if updatedAccount.Balance != createdAccount.Balance {
+		t.Errorf(
+			"expected balance to remain %v, got %v",
+			createdAccount.Balance,
+			updatedAccount.Balance,
+		)
+	}
+
+	if !updatedAccount.CreatedTimestamp.Equal(
+		createdAccount.CreatedTimestamp,
+	) {
+		t.Errorf(
+			"expected created timestamp to remain %s, got %s",
+			createdAccount.CreatedTimestamp,
+			updatedAccount.CreatedTimestamp,
+		)
+	}
+
+	if !updatedAccount.UpdatedTimestamp.After(
+		createdAccount.UpdatedTimestamp,
+	) {
+		t.Errorf(
+			"expected updated timestamp after %s, got %s",
+			createdAccount.UpdatedTimestamp,
+			updatedAccount.UpdatedTimestamp,
+		)
+	}
+
+	var storedName string
+	var storedAccountType string
+	var storedBalancePence int64
+
+	if err := db.QueryRow(
+		`
+			SELECT
+				name,
+				account_type,
+				balance_pence
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		createdAccount.AccountNumber,
+	).Scan(
+		&storedName,
+		&storedAccountType,
+		&storedBalancePence,
+	); err != nil {
+		t.Fatalf("failed to fetch updated account: %v", err)
+	}
+
+	if storedName != "Holiday Fund" {
+		t.Errorf(
+			"expected stored name %q, got %q",
+			"Holiday Fund",
+			storedName,
+		)
+	}
+
+	if storedAccountType != string(createdAccount.AccountType) {
+		t.Errorf(
+			"expected stored account type %q, got %q",
+			createdAccount.AccountType,
+			storedAccountType,
+		)
+	}
+
+	if storedBalancePence != 0 {
+		t.Errorf(
+			"expected stored balance to remain 0 pence, got %d",
+			storedBalancePence,
+		)
+	}
+}
+
+func TestUpdateAccountRejectsInvalidAccess(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, ownerRequest := createTestUser(t, handler)
+
+	ownerToken := loginTestUser(
+		t,
+		handler,
+		ownerRequest.Email,
+		ownerRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		ownerToken,
+		validCreateAccountRequest(),
+	)
+
+	otherUserRequest := validCreateUserRequest()
+	otherUserRequest.Name = "Another User"
+	otherUserRequest.Email = "another@example.com"
+
+	createUser(t, handler, otherUserRequest)
+
+	otherUserToken := loginTestUser(
+		t,
+		handler,
+		otherUserRequest.Email,
+		otherUserRequest.Password,
+	)
+
+	nonexistentAccountNumber := "01999999"
+	if account.AccountNumber == nonexistentAccountNumber {
+		nonexistentAccountNumber = "01888888"
+	}
+
+	tests := []struct {
+		name               string
+		token              string
+		accountNumber      string
+		expectedStatusCode int
+	}{
+		{
+			name:               "missing authentication",
+			accountNumber:      account.AccountNumber,
+			expectedStatusCode: http.StatusUnauthorized,
+		},
+		{
+			name:               "another user's account",
+			token:              otherUserToken,
+			accountNumber:      account.AccountNumber,
+			expectedStatusCode: http.StatusForbidden,
+		},
+		{
+			name:               "nonexistent account",
+			token:              ownerToken,
+			accountNumber:      nonexistentAccountNumber,
+			expectedStatusCode: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodPatch,
+				"/v1/accounts/"+test.accountNumber,
+				bytes.NewBufferString(`{"name":"Sneaky Update"}`),
+			)
+			request.Header.Set("Content-Type", "application/json")
+
+			if test.token != "" {
+				request.Header.Set(
+					"Authorization",
+					"Bearer "+test.token,
+				)
+			}
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.expectedStatusCode {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					test.expectedStatusCode,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.ErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf(
+					"failed to decode error response: %v",
+					err,
+				)
+			}
+
+			if errorResponse.Message == "" {
+				t.Error("expected an error message")
+			}
+		})
+	}
+
+	var storedName string
+
+	if err := db.QueryRow(
+		`
+			SELECT name
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&storedName); err != nil {
+		t.Fatalf("failed to fetch stored account name: %v", err)
+	}
+
+	if storedName != account.Name {
+		t.Errorf(
+			"expected account name to remain %q, got %q",
+			account.Name,
+			storedName,
+		)
+	}
+}
+
+func TestUpdateAccountRejectsInvalidValues(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	tests := []struct {
+		name               string
+		requestBody        string
+		expectedField      string
+		expectedDetailType string
+	}{
+		{
+			name:               "blank name",
+			requestBody:        `{"name":"   "}`,
+			expectedField:      "name",
+			expectedDetailType: "required",
+		},
+		{
+			name:               "empty account type",
+			requestBody:        `{"accountType":""}`,
+			expectedField:      "accountType",
+			expectedDetailType: "required",
+		},
+		{
+			name:               "unsupported account type",
+			requestBody:        `{"accountType":"business"}`,
+			expectedField:      "accountType",
+			expectedDetailType: "enum",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodPatch,
+				"/v1/accounts/"+account.AccountNumber,
+				bytes.NewBufferString(test.requestBody),
+			)
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set(
+				"Authorization",
+				"Bearer "+token,
+			)
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					http.StatusBadRequest,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.BadRequestErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf(
+					"failed to decode validation response: %v",
+					err,
+				)
+			}
+
+			foundExpectedError := false
+
+			for _, detail := range errorResponse.Details {
+				if detail.Field == test.expectedField &&
+					detail.Type == test.expectedDetailType {
+					foundExpectedError = true
+					break
+				}
+			}
+
+			if !foundExpectedError {
+				t.Errorf(
+					"expected %q validation error for field %q, got %+v",
+					test.expectedDetailType,
+					test.expectedField,
+					errorResponse.Details,
+				)
+			}
+		})
+	}
+
+	var storedName string
+	var storedAccountType string
+
+	if err := db.QueryRow(
+		`
+			SELECT name, account_type
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(
+		&storedName,
+		&storedAccountType,
+	); err != nil {
+		t.Fatalf("failed to fetch stored account: %v", err)
+	}
+
+	if storedName != account.Name {
+		t.Errorf(
+			"expected account name to remain %q, got %q",
+			account.Name,
+			storedName,
+		)
+	}
+
+	if storedAccountType != string(account.AccountType) {
+		t.Errorf(
+			"expected account type to remain %q, got %q",
+			account.AccountType,
+			storedAccountType,
+		)
+	}
+}
+
+func TestUpdateAccountRejectsMalformedJSON(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodPatch,
+		"/v1/accounts/"+account.AccountNumber,
+		bytes.NewBufferString(`{"name":"Holiday Fund",`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusBadRequest,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var errorResponse models.BadRequestErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&errorResponse,
+	); err != nil {
+		t.Fatalf(
+			"failed to decode error response: %v",
+			err,
+		)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected an error message")
+	}
+
+	if len(errorResponse.Details) != 0 {
+		t.Errorf(
+			"expected no field validation details, got %+v",
+			errorResponse.Details,
+		)
+	}
+
+	var storedName string
+
+	if err := db.QueryRow(
+		`
+			SELECT name
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&storedName); err != nil {
+		t.Fatalf("failed to fetch stored account name: %v", err)
+	}
+
+	if storedName != account.Name {
+		t.Errorf(
+			"expected account name to remain %q, got %q",
+			account.Name,
+			storedName,
+		)
+	}
+}
+
+func TestUpdateAccountWithEmptyPatchDoesNotModifyAccount(
+	t *testing.T,
+) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	var timestampBeforePatch string
+
+	if err := db.QueryRow(
+		`
+			SELECT updated_timestamp
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&timestampBeforePatch); err != nil {
+		t.Fatalf(
+			"failed to fetch timestamp before patch: %v",
+			err,
+		)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPatch,
+		"/v1/accounts/"+account.AccountNumber,
+		bytes.NewBufferString(`{}`),
+	)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusOK,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var returnedAccount models.BankAccount
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&returnedAccount,
+	); err != nil {
+		t.Fatalf(
+			"failed to decode account response: %v",
+			err,
+		)
+	}
+
+	if returnedAccount.Name != account.Name {
+		t.Errorf(
+			"expected name to remain %q, got %q",
+			account.Name,
+			returnedAccount.Name,
+		)
+	}
+
+	if returnedAccount.AccountType != account.AccountType {
+		t.Errorf(
+			"expected account type to remain %q, got %q",
+			account.AccountType,
+			returnedAccount.AccountType,
+		)
+	}
+
+	if !returnedAccount.UpdatedTimestamp.Equal(
+		account.UpdatedTimestamp,
+	) {
+		t.Errorf(
+			"expected updated timestamp to remain %s, got %s",
+			account.UpdatedTimestamp,
+			returnedAccount.UpdatedTimestamp,
+		)
+	}
+
+	var timestampAfterPatch string
+
+	if err := db.QueryRow(
+		`
+			SELECT updated_timestamp
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&timestampAfterPatch); err != nil {
+		t.Fatalf(
+			"failed to fetch timestamp after patch: %v",
+			err,
+		)
+	}
+
+	if timestampAfterPatch != timestampBeforePatch {
+		t.Errorf(
+			"expected stored timestamp to remain %q, got %q",
+			timestampBeforePatch,
+			timestampAfterPatch,
+		)
+	}
+}

@@ -48,6 +48,11 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 	)
 
 	mux.Handle(
+		"PATCH /v1/accounts/{accountNumber}",
+		authenticate(http.HandlerFunc(accountHandler.UpdateAccount)),
+	)
+
+	mux.Handle(
 		"POST /v1/accounts/{accountNumber}/transactions",
 		authenticate(http.HandlerFunc(transactionHandler.CreateTransaction)),
 	)
@@ -59,11 +64,7 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 
 	mux.Handle(
 		"GET /v1/accounts/{accountNumber}/transactions/{transactionId}",
-		authenticate(
-			http.HandlerFunc(
-				transactionHandler.GetTransaction,
-			),
-		),
+		authenticate(http.HandlerFunc(transactionHandler.GetTransaction)),
 	)
 
 	return mux
