@@ -12,47 +12,49 @@ Implemented:
 * User registration
 * Email/password login
 * JWT creation and validation
-* Fetch authenticated user details
+* Fetch, update and delete authenticated users
 * User ownership and not-found handling
-* Create bank accounts
-* List accounts belonging to the authenticated user
-* Fetch an individual owned account
+* Email and international phone-number validation
+* Create, list, fetch, update and delete bank accounts
 * Account ownership and not-found handling
+* Partial updates with unchanged-field preservation
 * Create deposit and withdrawal transactions
 * Atomic account balance and transaction updates
 * Insufficient-funds protection
 * Maximum account-balance protection
 * Transaction request validation
-* List transactions belonging to an account
-* Fetch an individual transaction
+* List and fetch transactions
 * Transaction-to-account validation
 * Transaction ownership and not-found handling
+* Retention of accounts containing transaction history
+* Prevention of deleting users who still own accounts
 * SQLite persistence and database constraints
 * Structured error responses
 * Automated HTTP, database and authentication middleware tests
 
 In progress:
 
-* Update and delete users
-* Update and delete bank accounts
 * Final OpenAPI updates and contract verification
 * Final code review and documentation polish
 
 ## Implemented endpoints
 
-| Method | Path                                                        | Authentication |
-| ------ | ----------------------------------------------------------- | -------------- |
-| `GET`  | `/health`                                                   | No             |
-| `POST` | `/v1/users`                                                 | No             |
-| `POST` | `/v1/auth/login`                                            | No             |
-| `GET`  | `/v1/users/{userId}`                                        | Bearer JWT     |
-| `POST` | `/v1/accounts`                                              | Bearer JWT     |
-| `GET`  | `/v1/accounts`                                              | Bearer JWT     |
-| `GET`  | `/v1/accounts/{accountNumber}`                              | Bearer JWT     |
-| `POST` | `/v1/accounts/{accountNumber}/transactions`                 | Bearer JWT     |
-| `GET`  | `/v1/accounts/{accountNumber}/transactions`                 | Bearer JWT     |
-| `GET`  | `/v1/accounts/{accountNumber}/transactions/{transactionId}` | Bearer JWT     |
-
+| Method   | Path                                                        | Authentication |
+| -------- | ----------------------------------------------------------- | -------------- |
+| `GET`    | `/health`                                                   | No             |
+| `POST`   | `/v1/users`                                                 | No             |
+| `POST`   | `/v1/auth/login`                                            | No             |
+| `GET`    | `/v1/users/{userId}`                                        | Bearer JWT     |
+| `PATCH`  | `/v1/users/{userId}`                                        | Bearer JWT     |
+| `DELETE` | `/v1/users/{userId}`                                        | Bearer JWT     |
+| `POST`   | `/v1/accounts`                                              | Bearer JWT     |
+| `GET`    | `/v1/accounts`                                              | Bearer JWT     |
+| `GET`    | `/v1/accounts/{accountNumber}`                              | Bearer JWT     |
+| `PATCH`  | `/v1/accounts/{accountNumber}`                              | Bearer JWT     |
+| `DELETE` | `/v1/accounts/{accountNumber}`                              | Bearer JWT     |
+| `POST`   | `/v1/accounts/{accountNumber}/transactions`                 | Bearer JWT     |
+| `GET`    | `/v1/accounts/{accountNumber}/transactions`                 | Bearer JWT     |
+| `GET`    | `/v1/accounts/{accountNumber}/transactions/{transactionId}` | Bearer JWT     |
 
 ## Requirements
 
@@ -124,6 +126,18 @@ Transaction tests cover:
 * Account ownership and nonexistent accounts
 * Transaction-to-account scoping
 * Balance and transaction atomicity following rejected operations
+
+User and account tests also cover:
+
+* Partial updates and preservation of omitted fields
+* Empty PATCH requests as non-mutating no-ops
+* Persisted values and update timestamps
+* Required-field and format validation
+* Neutral handling of unavailable email addresses
+* Authentication, ownership and nonexistent resources
+* Successful deletion of unassociated resources
+* Deletion conflicts for retained transaction and account relationships
+* Preservation of related records following rejected deletions
 
 ## Authentication
 
@@ -204,6 +218,15 @@ Both operations run inside one SQL transaction. The transaction is committed onl
 
 Withdrawals with insufficient funds return `422 Unprocessable Entity` without creating a transaction or changing the account balance. Deposits that would exceed the contract’s maximum account balance are rejected in the same way.
 
+### Deletion and retained history
+
+Transactions are immutable and retained once created.
+
+An account can be deleted only when it has no transactions. Attempts to delete an account containing transaction history return `409 Conflict` without deleting either the account or its transactions.
+
+A user can be deleted only after all their bank accounts have been deleted. Attempts to delete a user who still owns an account return `409 Conflict`.
+
+The application performs explicit association checks to return meaningful API responses. Restrictive foreign keys provide a second integrity boundary at the database level.
 
 ### Ownership and authorisation
 
@@ -215,6 +238,16 @@ Authentication and authorisation failures are distinguished:
 
 * `401 Unauthorized` for missing, malformed, invalid or expired credentials
 * `403 Forbidden` when an authenticated user attempts to access another user's resource
+
+### Partial updates
+
+User and account updates use `PATCH` semantics. Request fields are represented by pointers so the application can distinguish an omitted property from a supplied value.
+
+Only supplied properties are applied. Omitted properties retain their existing values.
+
+An empty JSON object is treated as a successful no-op. The existing resource is returned without executing a database update or changing its `updatedTimestamp`.
+
+When an address is supplied during a user update, it is treated as a complete address replacement and must contain all required address fields.
 
 ### Database constraints
 
@@ -261,6 +294,8 @@ The supplied transaction ID pattern allows exactly one alphanumeric character af
 Some identifier schemas use `format` for regular-expression constraints. These will use `pattern` in the submitted specification so OpenAPI validators interpret them correctly.
 
 The final OpenAPI specification will also document the added authentication flow and align its request and response schemas with the completed implementation.
+
+The supplied account deletion operation does not document behaviour for an account containing transactions. To preserve immutable transaction history, the implementation returns `409 Conflict` and the submitted OpenAPI specification will document this response.
 
 ## Project structure
 

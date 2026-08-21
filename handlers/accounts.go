@@ -535,9 +535,23 @@ func (h *AccountHandler) DeleteAccount(
 
 	accountNumber := r.PathValue("accountNumber")
 
+	databaseTransaction, err := h.db.BeginTx(
+		r.Context(),
+		nil,
+	)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to delete account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+	defer databaseTransaction.Rollback()
+
 	var accountOwnerID string
 
-	err := h.db.QueryRowContext(
+	err = databaseTransaction.QueryRowContext(
 		r.Context(),
 		`
 			SELECT user_id
@@ -574,7 +588,36 @@ func (h *AccountHandler) DeleteAccount(
 		return
 	}
 
-	_, err = h.db.ExecContext(
+	var transactionCount int
+
+	err = databaseTransaction.QueryRowContext(
+		r.Context(),
+		`
+			SELECT COUNT(*)
+			FROM transactions
+			WHERE account_number = ?
+		`,
+		accountNumber,
+	).Scan(&transactionCount)
+	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to delete account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	if transactionCount > 0 {
+		response := models.ErrorResponse{
+			Message: "account cannot be deleted while it has transactions",
+		}
+
+		_ = writeJSON(w, http.StatusConflict, response)
+		return
+	}
+
+	_, err = databaseTransaction.ExecContext(
 		r.Context(),
 		`
 			DELETE FROM accounts
@@ -583,6 +626,15 @@ func (h *AccountHandler) DeleteAccount(
 		accountNumber,
 	)
 	if err != nil {
+		response := models.ErrorResponse{
+			Message: "failed to delete account",
+		}
+
+		_ = writeJSON(w, http.StatusInternalServerError, response)
+		return
+	}
+
+	if err := databaseTransaction.Commit(); err != nil {
 		response := models.ErrorResponse{
 			Message: "failed to delete account",
 		}

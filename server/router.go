@@ -33,6 +33,16 @@ func NewRouter(db *sql.DB, jwtSecret []byte) http.Handler {
 	)
 
 	mux.Handle(
+		"PATCH /v1/users/{userId}",
+		authenticate(http.HandlerFunc(userHandler.UpdateUser)),
+	)
+
+	mux.Handle(
+		"DELETE /v1/users/{userId}",
+		authenticate(http.HandlerFunc(userHandler.DeleteUser)),
+	)
+
+	mux.Handle(
 		"POST /v1/accounts",
 		authenticate(http.HandlerFunc(accountHandler.CreateAccount)),
 	)

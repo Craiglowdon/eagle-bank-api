@@ -28,3 +28,10 @@ type User struct {
 	CreatedTimestamp time.Time `json:"createdTimestamp"`
 	UpdatedTimestamp time.Time `json:"updatedTimestamp"`
 }
+
+type UpdateUserRequest struct {
+	Name        *string  `json:"name"`
+	Address     *Address `json:"address"`
+	PhoneNumber *string  `json:"phoneNumber"`
+	Email       *string  `json:"email"`
+}

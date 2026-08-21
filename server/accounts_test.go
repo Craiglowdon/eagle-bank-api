@@ -1291,3 +1291,252 @@ func TestDeleteAccount(t *testing.T) {
 		)
 	}
 }
+
+func TestDeleteAccountRejectsAccountWithTransactions(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, createUserRequest := createTestUser(t, handler)
+
+	token := loginTestUser(
+		t,
+		handler,
+		createUserRequest.Email,
+		createUserRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		token,
+		validCreateAccountRequest(),
+	)
+
+	transaction := createTransaction(
+		t,
+		handler,
+		token,
+		account.AccountNumber,
+		transactionRequest(
+			10,
+			models.TransactionTypeDeposit,
+		),
+	)
+
+	request := httptest.NewRequest(
+		http.MethodDelete,
+		"/v1/accounts/"+account.AccountNumber,
+		nil,
+	)
+	request.Header.Set(
+		"Authorization",
+		"Bearer "+token,
+	)
+
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusConflict {
+		t.Fatalf(
+			"expected status %d, got %d; body: %s",
+			http.StatusConflict,
+			response.Code,
+			response.Body.String(),
+		)
+	}
+
+	var errorResponse models.ErrorResponse
+
+	if err := json.NewDecoder(response.Body).Decode(
+		&errorResponse,
+	); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errorResponse.Message == "" {
+		t.Error("expected an error message")
+	}
+
+	var accountCount int
+	var balancePence int64
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*), COALESCE(MAX(balance_pence), 0)
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(
+		&accountCount,
+		&balancePence,
+	); err != nil {
+		t.Fatalf("failed to inspect stored account: %v", err)
+	}
+
+	if accountCount != 1 {
+		t.Errorf(
+			"expected account to remain, found %d matching accounts",
+			accountCount,
+		)
+	}
+
+	if balancePence != 1000 {
+		t.Errorf(
+			"expected balance to remain 1000 pence, got %d",
+			balancePence,
+		)
+	}
+
+	var transactionCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM transactions
+			WHERE id = ?
+			  AND account_number = ?
+		`,
+		transaction.ID,
+		account.AccountNumber,
+	).Scan(&transactionCount); err != nil {
+		t.Fatalf("failed to inspect stored transaction: %v", err)
+	}
+
+	if transactionCount != 1 {
+		t.Errorf(
+			"expected transaction to remain, found %d matching transactions",
+			transactionCount,
+		)
+	}
+}
+
+func TestDeleteAccountRejectsInvalidAccess(t *testing.T) {
+	db := testDatabase(t)
+	handler := NewRouter(db, []byte(testJWTSecret))
+
+	_, ownerRequest := createTestUser(t, handler)
+
+	ownerToken := loginTestUser(
+		t,
+		handler,
+		ownerRequest.Email,
+		ownerRequest.Password,
+	)
+
+	account := createAccount(
+		t,
+		handler,
+		ownerToken,
+		validCreateAccountRequest(),
+	)
+
+	otherUserRequest := validCreateUserRequest()
+	otherUserRequest.Name = "Another User"
+	otherUserRequest.Email = "another@example.com"
+
+	createUser(t, handler, otherUserRequest)
+
+	otherUserToken := loginTestUser(
+		t,
+		handler,
+		otherUserRequest.Email,
+		otherUserRequest.Password,
+	)
+
+	nonexistentAccountNumber := "01999999"
+	if account.AccountNumber == nonexistentAccountNumber {
+		nonexistentAccountNumber = "01888888"
+	}
+
+	tests := []struct {
+		name               string
+		token              string
+		accountNumber      string
+		expectedStatusCode int
+	}{
+		{
+			name:               "missing authentication",
+			accountNumber:      account.AccountNumber,
+			expectedStatusCode: http.StatusUnauthorized,
+		},
+		{
+			name:               "another user's account",
+			token:              otherUserToken,
+			accountNumber:      account.AccountNumber,
+			expectedStatusCode: http.StatusForbidden,
+		},
+		{
+			name:               "nonexistent account",
+			token:              ownerToken,
+			accountNumber:      nonexistentAccountNumber,
+			expectedStatusCode: http.StatusNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodDelete,
+				"/v1/accounts/"+test.accountNumber,
+				nil,
+			)
+
+			if test.token != "" {
+				request.Header.Set(
+					"Authorization",
+					"Bearer "+test.token,
+				)
+			}
+
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.expectedStatusCode {
+				t.Fatalf(
+					"expected status %d, got %d; body: %s",
+					test.expectedStatusCode,
+					response.Code,
+					response.Body.String(),
+				)
+			}
+
+			var errorResponse models.ErrorResponse
+
+			if err := json.NewDecoder(response.Body).Decode(
+				&errorResponse,
+			); err != nil {
+				t.Fatalf(
+					"failed to decode error response: %v",
+					err,
+				)
+			}
+
+			if errorResponse.Message == "" {
+				t.Error("expected an error message")
+			}
+		})
+	}
+
+	var accountCount int
+
+	if err := db.QueryRow(
+		`
+			SELECT COUNT(*)
+			FROM accounts
+			WHERE account_number = ?
+		`,
+		account.AccountNumber,
+	).Scan(&accountCount); err != nil {
+		t.Fatalf("failed to count stored accounts: %v", err)
+	}
+
+	if accountCount != 1 {
+		t.Errorf(
+			"expected account to remain, found %d matching accounts",
+			accountCount,
+		)
+	}
+}
